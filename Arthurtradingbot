@@ -1,0 +1,86 @@
+import os
+from flask import Flask, jsonify, request
+import alpaca_trade_api as tradeapi
+import numpy as np
+import requests
+import json
+from textblob import TextBlob
+from datetime import datetime
+import time
+
+# Initialize Flask app
+app = Flask(__name__)
+
+# Alpaca API keys
+API_KEY = os.getenv('ALPACA_API_KEY')
+API_SECRET = os.getenv('ALPACA_API_SECRET')
+BASE_URL = 'https://paper-api.alpaca.markets'
+
+# Initialize Alpaca API
+api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
+
+# Example trading strategy: Moving Average Crossover
+def moving_average_crossover(symbol):
+    barset = api.get_barset(symbol, 'minute', limit=50)
+    prices = [bar.c for bar in barset[symbol]]
+    
+    short_window = 10
+    long_window = 30
+
+    short_ma = np.mean(prices[-short_window:])
+    long_ma = np.mean(prices[-long_window:])
+
+    if short_ma > long_ma:
+        return 'BUY'
+    elif short_ma < long_ma:
+        return 'SELL'
+    else:
+        return 'HOLD'
+
+# Function to check sentiment of news articles
+def analyze_sentiment(news_url):
+    news_data = requests.get(news_url).json()
+    headline = news_data['headline']
+
+    blob = TextBlob(headline)
+    sentiment_score = blob.sentiment.polarity
+
+    return sentiment_score
+
+# Alpaca trading function
+def execute_trade(symbol, action, amount=1):
+    if action == 'BUY':
+        api.submit_order(
+            symbol=symbol,
+            qty=amount,
+            side='buy',
+            type='market',
+            time_in_force='gtc'
+        )
+    elif action == 'SELL':
+        api.submit_order(
+            symbol=symbol,
+            qty=amount,
+            side='sell',
+            type='market',
+            time_in_force='gtc'
+        )
+
+@app.route('/trade', methods=['POST'])
+def trade():
+    data = request.get_json()
+    symbol = data['symbol']
+    action = moving_average_crossover(symbol)
+    
+    # Execute trade based on the action
+    if action != 'HOLD':
+        execute_trade(symbol, action)
+
+    return jsonify({'message': f'{action} action taken for {symbol}'}), 200
+
+@app.route('/status', methods=['GET'])
+def status():
+    return jsonify({'status': 'Bot is running'}), 200
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
